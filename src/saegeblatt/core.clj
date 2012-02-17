@@ -4,30 +4,25 @@
 (def state (atom {:traversaltime 500
                   :direction :left-to-right
                   :starttime nil
-                  :current-view @view}))
+                  :current-view []}))
 
-(def stop (atom nil))
-
-(defn measure-traversal-time
+(declare view)
+(defn traversal-time-loop
   ([rcvr]
     (let [byte1 (rcvr)
           start (System/currentTimeMillis)]
-      (measure-traversal-time rcvr start)))
+      (traversal-time-loop rcvr start)))
   ([rcvr start]
     (let [byte2 (rcvr)
           end (System/currentTimeMillis)
           tt (- end start)]
-      ;(println tt)
       (reset! state {:traversaltime tt
                      :direction (if (= byte2 0)
                                   :left-to-right
                                   :right-to-left)
                      :starttime end
                      :current-view @view})
-      (when (not @stop)
-        (recur rcvr end)))))
-
-(def sender (make-send "localhost" 13664))
+      (recur rcvr end))))
 
 (declare conf)
 (defmulti calculate-view-index (fn [mode & _] mode))
@@ -63,22 +58,19 @@
 ;        steps-done (/ time-since-0 step)]
 ;    (int (mod (+ 64 steps-done) 128))))
 
-(let [last-idx (atom -1)]
-  (defn show-text [{:keys [starttime traversaltime direction current-view]} view]
-    (let [view-index (calculate-view-index (:mode @conf) (- (System/currentTimeMillis) starttime) traversaltime direction)]
-      (when (and (= 0 view-index) (not= view-index @last-idx))
-        (swap! state assoc :current-view view))
-      (reset! last-idx view-index)
-      (sender (nth current-view view-index)))))
+(defn show-text [{:keys [starttime traversaltime direction current-view]} 
+                 view
+                 send-fn]
+  (let [view-index (calculate-view-index (:mode @conf) (- (System/currentTimeMillis) starttime) traversaltime direction)]
+    (when (and (= 0 view-index))
+      (swap! state assoc :current-view view))
+    (send-fn (nth current-view view-index))))
 
-(defn render-loop []
-  ;(println @state)
-  ;(println @view)
-  ;(show-text @state @view)
+(defn render-loop [sender]
   (when (:starttime @state)
-    (show-text @state @view))
+    (show-text @state @view sender))
   ;(Thread/sleep 1)
-  (recur))
+  (recur sender))
 
 (defn push-loop [pusher]
   (when (:starttime @state)
@@ -86,31 +78,22 @@
   (Thread/sleep (/ (:traversaltime @state) 6))
   (recur pusher))
 
-(defn in-thread [f]
-  (.start (Thread. f)))
+(defmacro parallel [& body]
+  (->> (map (fn [expr] `(.start (Thread. (fn [] ~expr))))
+            body)
+    (cons 'do)))
 
-(defn init-measurement []
-  (in-thread #(measure-traversal-time (make-receive 13665))))
+(def conf (atom {:mode :bilinear}))
 
-(defn init-world []
-  (in-thread #(run render-view 500 world view scroller-maker 3 bitmap-scroller)))
+(def text "THANK GOD IT'S FRIDAY    ")
 
-(defn init-rendering []
-  (in-thread #(render-loop)))
+(def world (atom (string-to-bytes text)))
 
-(defn init-pushing [pusher]
-  (in-thread #(push-loop pusher)))
-
-(def conf (atom {:mode :harmonic}))
+(def view (atom @world))
 
 (defn -main [& args]
-  (init-measurement)
-  (init-world)
-  (init-rendering)
-  (init-pushing (make-send "localhost" 13666)))
-
-
-(defmacro in-parallel
-  "Evaluates test. If logical true, evaluates body in an implicit do."
-  [& body]
-  (list 'do body))
+  (parallel
+    (traversal-time-loop (make-receive 13665))
+    (world-loop 500 world view scroller-maker 3 bitmap-scroller)
+    (render-loop (make-send "localhost" 13664))
+    (push-loop (make-send "localhost" 13666))))

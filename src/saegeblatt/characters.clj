@@ -204,4 +204,3 @@
   ([s idx]
      (lazy-seq (cons (nth s (mod idx (count s))) (rotate s (inc idx))))))
 
-
